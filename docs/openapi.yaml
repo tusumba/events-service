@@ -1,0 +1,1681 @@
+openapi: 3.0.3
+info:
+  title: Tusumba Events & Clubs API
+  version: 1.0.0
+  description: |
+    API сервиса Events & Clubs по разделам «Каталог и поиск», «Мероприятия и секции»,
+    «Статистика» (статистика секции) и «Внутренние вызовы» архитектуры Tusumba:
+    каталоги и поиск мероприятий и секций, страницы мероприятия и секции, редактирование
+    с версиями текста, фото, команда мероприятия и роли.
+
+    Внешний API доступен только через API Gateway под префиксом `/v1`. Каталоги, страницы
+    и фото доступны без входа, токен для них необязателен. Пути `/internal` шлюз не проксирует,
+    их вызывают только другие сервисы с сервисным токеном в заголовке `X-Service-Token` (#18886).
+
+    **Публикация.** Мероприятие и секция создаются только по одобренной заявке: events-service
+    получает событие `ApplicationApproved` от Moderation, создаёт объект с id из
+    `result_object_id`, первую версию текста и назначает автора заявки владельцем команды
+    (`event_team_members`, роль `owner`) или администратором секции (`club_admins`).
+    Повтор события не создаёт второй объект. Созданное мероприятие сразу опубликовано
+    (событие `EventPublished`) и показывается в каталоге в любом статусе подтверждения:
+    `not_confirmed`, `confirmed`, `held`, `not_held`; статус можно выбрать фильтром.
+    Секция в статусе `blocked` не показывается ни в каталоге, ни по прямой ссылке.
+
+    **Версии текста.** Изменение названия или описания мероприятия создаёт новую строку
+    `event_versions`; изменение описания, места, расписания или контактов секции - новую строку
+    `club_versions`. Старые версии не меняются, жалоба ссылается на конкретную версию.
+    После редактирования мероприятия публикуется `EventUpdated`.
+
+    **Права.** Роли команды мероприятия (`owner`, `admin`, `editor`, `scanner`) и администраторы
+    секций хранятся только здесь. Остальные сервисы спрашивают их через `/internal/.../permissions`
+    и кешируют ответ в Redis на 30-60 секунд. В команде всегда остаётся хотя бы один владелец.
+    Роль `scanner` («контролёр на входе») - по ER-диаграмме; решение, нужна ли она, принимается в #18901.
+
+    **Дополнения к вики** (нужны для работы других сервисов и клиентов, согласовать):
+    - `GET /internal/events/{id}` - Ticketing получает дату и статус мероприятия, Moderation - текущую версию текста для жалобы;
+    - `GET /internal/clubs/{id}`, `GET /internal/clubs/{id}/permissions` - Moderation проверяет секцию для жалобы
+      и право подать заявку от имени секции (#18102);
+    - `GET /v1/team-invitations` - приглашённый видит свои приглашения в команду;
+    - `GET` и `DELETE` для фото - показ фото и возврат стандартной обложки (#18103, п. 5.2).
+
+    Общие правила:
+    - списки: параметры `page` (с 1) и `size` (по умолчанию 20, максимум 100), ответ `items`, `total`, `page`, `size`;
+    - ошибки: объект `error` с машинным кодом `code` и сообщением `message` для пользователя (#18886),
+      для `validation_error` дополнительно `details` по полям;
+    - при ответе 5xx клиент показывает сообщение «... Попробуйте позже.» из требования;
+    - пустой каталог и поиск без совпадений - штатный ответ 200 с пустым `items`;
+    - идентификаторы - UUID, время - ISO 8601 в UTC, дата мероприятия - `YYYY-MM-DD`,
+      «сегодня» считается по времени Новосибирска.
+
+    Не входит в эту версию (открытые решения, раздел 9 вики): членство в секции, список
+    участников секции и вступление (#18628).
+  x-task: https://ai.nsu.ru/issues/18891
+externalDocs:
+  description: Архитектура Tusumba
+  url: https://ai.nsu.ru/projects/tusumba/wiki/Архитектура
+security:
+  - BearerAuth: []
+tags:
+  - name: events
+    description: Каталог, поиск и страница мероприятия, редактирование и версии (#18098, #18110-#18113)
+  - name: team
+    description: Команда мероприятия и роли (#18093)
+  - name: clubs
+    description: Каталог, поиск и страница секции, редактирование (#18103, #18626-#18628)
+  - name: photos
+    description: Фото мероприятий и секций
+  - name: stats
+    description: Статистика секции (#18105, черновик, Спринт 3)
+  - name: internal
+    description: Внутренние вызовы для других сервисов, снаружи недоступны
+paths:
+  /v1/events:
+    get:
+      tags: [events]
+      operationId: listEvents
+      summary: Каталог мероприятий
+      description: |
+        Опубликованные мероприятия, ближайшие по дате выше (#18110). Карточка содержит название,
+        дату, место и цену. Поиск `query` по части названия текущей версии (pg_trgm, без учёта регистра)
+        и фильтры применяются одновременно (#18111, #18112).
+
+        «Тип мероприятия» в модели данных - платное или бесплатное (`is_free`), отдельного поля
+        типа в `events` нет.
+
+        Если `date_from` не задан, показываются мероприятия с сегодняшней даты.
+        Мероприятия секции на её странице - `GET /v1/events?club_id=...`.
+      security:
+        - {}
+        - BearerAuth: []
+      parameters:
+        - name: query
+          in: query
+          required: false
+          description: Часть названия мероприятия
+          schema:
+            type: string
+            minLength: 1
+            maxLength: 100
+        - name: is_free
+          in: query
+          required: false
+          description: Тип мероприятия - true бесплатные, false платные
+          schema:
+            type: boolean
+        - name: date_from
+          in: query
+          required: false
+          description: Мероприятия не раньше этой даты, по умолчанию сегодня
+          schema:
+            type: string
+            format: date
+        - name: date_to
+          in: query
+          required: false
+          description: Мероприятия не позже этой даты
+          schema:
+            type: string
+            format: date
+        - name: place
+          in: query
+          required: false
+          description: Часть адреса места проведения
+          schema:
+            type: string
+            minLength: 1
+            maxLength: 200
+        - name: status
+          in: query
+          required: false
+          description: Статусы подтверждения, можно указать несколько
+          style: form
+          explode: true
+          schema:
+            type: array
+            items:
+              $ref: '#/components/schemas/EventStatus'
+        - name: club_id
+          in: query
+          required: false
+          description: Мероприятия одной секции-организатора
+          schema:
+            type: string
+            format: uuid
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Size'
+      responses:
+        '200':
+          description: Страница каталога, при отсутствии мероприятий - пустой список
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EventCardPage'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+  /v1/events/{id}:
+    parameters:
+      - $ref: '#/components/parameters/EventId'
+    get:
+      tags: [events]
+      operationId: getEvent
+      summary: Страница мероприятия
+      description: |
+        Название, описание, дата, место, цена и организатор (#18113).
+        Для вошедшего пользователя в `my_role` возвращается его роль в команде мероприятия.
+        Покупка билета, запись «Пойду» и друзья, которые идут, - в Ticketing и Identity.
+      security:
+        - {}
+        - BearerAuth: []
+      responses:
+        '200':
+          description: Мероприятие
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EventDetail'
+        '404':
+          $ref: '#/components/responses/EventNotFound'
+    patch:
+      tags: [events]
+      operationId: updateEvent
+      summary: Редактировать мероприятие
+      description: |
+        Доступно владельцу, администратору и редактору мероприятия (#18098).
+        Передаются только изменяемые поля. Изменение `title` или `description` создаёт новую
+        версию текста, остальные поля меняются в самом мероприятии. После сохранения
+        публикуется `EventUpdated`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EventUpdate'
+            example:
+              description: Концерт, конкурсы и дискотека. Вход по студенческому билету.
+              place_address: Новосибирск, ул. Пирогова, 2, спортивный комплекс НГУ
+      responses:
+        '200':
+          description: Мероприятие сохранено
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EventDetail'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: '`forbidden` - пользователь не владелец, не администратор и не редактор мероприятия.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                error:
+                  code: forbidden
+                  message: У вас нет прав на редактирование мероприятия.
+        '404':
+          $ref: '#/components/responses/EventNotFound'
+        '422':
+          description: |
+            `validation_error` - пустое обязательное поле, дата в прошлом, нет места проведения,
+            у платного мероприятия нет цены.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                error:
+                  code: validation_error
+                  message: Дата мероприятия не может быть в прошлом.
+                  details:
+                    - field: date
+                      message: Дата мероприятия не может быть в прошлом.
+  /v1/events/{id}/versions:
+    parameters:
+      - $ref: '#/components/parameters/EventId'
+    get:
+      tags: [events]
+      operationId: listEventVersions
+      summary: История версий текста мероприятия
+      description: Версии текста, новые первыми. Доступно команде мероприятия и модератору.
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Size'
+      responses:
+        '200':
+          description: Версии текста
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EventVersionPage'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: '`forbidden` - пользователь не в команде мероприятия и не модератор.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                error:
+                  code: forbidden
+                  message: Недостаточно прав.
+        '404':
+          $ref: '#/components/responses/EventNotFound'
+  /v1/events/{id}/photo:
+    parameters:
+      - $ref: '#/components/parameters/EventId'
+    get:
+      tags: [photos]
+      operationId: getEventPhoto
+      summary: Фото мероприятия
+      security: []
+      responses:
+        '200':
+          description: Файл фото
+          content:
+            image/jpeg:
+              schema:
+                type: string
+                format: binary
+            image/png:
+              schema:
+                type: string
+                format: binary
+            image/webp:
+              schema:
+                type: string
+                format: binary
+        '404':
+          $ref: '#/components/responses/PhotoNotFound'
+    put:
+      tags: [photos]
+      operationId: uploadEventPhoto
+      summary: Загрузить фото мероприятия
+      description: |
+        Загрузка файлом (multipart). Сервис проверяет тип и размер, сохраняет файл через
+        PhotoStorage и заменяет прежнее фото. Доступно владельцу, администратору и редактору.
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/PhotoUpload'
+      responses:
+        '200':
+          description: Фото сохранено
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Photo'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: '`forbidden` - пользователь не владелец, не администратор и не редактор мероприятия.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                error:
+                  code: forbidden
+                  message: У вас нет прав на редактирование мероприятия.
+        '404':
+          $ref: '#/components/responses/EventNotFound'
+        '422':
+          $ref: '#/components/responses/FileInvalid'
+    delete:
+      tags: [photos]
+      operationId: deleteEventPhoto
+      summary: Удалить фото мероприятия
+      description: После удаления клиент показывает стандартную обложку.
+      responses:
+        '204':
+          description: Фото удалено
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: '`forbidden` - пользователь не владелец, не администратор и не редактор мероприятия.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                error:
+                  code: forbidden
+                  message: У вас нет прав на редактирование мероприятия.
+        '404':
+          $ref: '#/components/responses/EventNotFound'
+  /v1/events/{id}/team:
+    parameters:
+      - $ref: '#/components/parameters/EventId'
+    get:
+      tags: [team]
+      operationId: getEventTeam
+      summary: Состав команды и роли
+      description: Участники команды и неотвеченные приглашения. Доступно владельцу (#18093).
+      responses:
+        '200':
+          description: Команда мероприятия
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Team'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/TeamForbidden'
+        '404':
+          $ref: '#/components/responses/EventNotFound'
+  /v1/events/{id}/team/invitations:
+    parameters:
+      - $ref: '#/components/parameters/EventId'
+    post:
+      tags: [team]
+      operationId: inviteToTeam
+      summary: Пригласить в команду
+      description: |
+        Владелец приглашает пользователя с ролью (#18093). Указывается ровно одно из полей:
+        `user_id` - зарегистрированный пользователь (по нику клиент находит его через
+        Identity `GET /v1/users?query=`), или `email`. Участник добавляется в команду после
+        того, как примет приглашение. О приглашении сообщает Notifications (событие по #18889).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TeamInvitationCreate'
+            example:
+              user_id: 3c9f1e2a-5b6d-4e7f-8a9b-0c1d2e3f4a5b
+              role: editor
+      responses:
+        '201':
+          description: Приглашение создано
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TeamInvitation'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/TeamForbidden'
+        '404':
+          $ref: '#/components/responses/EventNotFound'
+        '409':
+          description: |
+            `already_in_team` - пользователь уже в команде;
+            `invitation_already_sent` - приглашение этому пользователю уже ждёт ответа.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                error:
+                  code: already_in_team
+                  message: Пользователь уже состоит в команде.
+        '422':
+          description: '`validation_error` - не указан пользователь или email, некорректный email, неизвестная роль.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                error:
+                  code: validation_error
+                  message: Некорректный email.
+                  details:
+                    - field: email
+                      message: Некорректный email.
+  /v1/events/{id}/team/{userId}:
+    parameters:
+      - $ref: '#/components/parameters/EventId'
+      - name: userId
+        in: path
+        required: true
+        description: Участник команды (identity_db.users.id)
+        schema:
+          type: string
+          format: uuid
+    patch:
+      tags: [team]
+      operationId: updateTeamMember
+      summary: Сменить роль участника
+      description: |
+        Доступно владельцу. Владелец может назначить роль `owner` другому участнику и так
+        передать владение. Последнего владельца нельзя понизить (проверка в одной транзакции).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TeamMemberUpdate'
+      responses:
+        '200':
+          description: Роль изменена
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TeamMember'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/TeamForbidden'
+        '404':
+          $ref: '#/components/responses/TeamMemberNotFound'
+        '409':
+          $ref: '#/components/responses/LastOwner'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+    delete:
+      tags: [team]
+      operationId: removeTeamMember
+      summary: Удалить участника из команды
+      description: Доступно владельцу. Последнего владельца удалить нельзя.
+      responses:
+        '204':
+          description: Участник удалён
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/TeamForbidden'
+        '404':
+          $ref: '#/components/responses/TeamMemberNotFound'
+        '409':
+          $ref: '#/components/responses/LastOwner'
+  /v1/team-invitations:
+    get:
+      tags: [team]
+      operationId: listMyTeamInvitations
+      summary: Мои приглашения в команды мероприятий
+      description: Приглашения текущему пользователю, ожидающие ответа, новые первыми.
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Size'
+      responses:
+        '200':
+          description: Приглашения
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TeamInvitationPage'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+  /v1/team-invitations/{id}/accept:
+    parameters:
+      - $ref: '#/components/parameters/InvitationId'
+    post:
+      tags: [team]
+      operationId: acceptTeamInvitation
+      summary: Принять приглашение в команду
+      description: Доступно приглашённому. Пользователь добавляется в команду с ролью из приглашения.
+      responses:
+        '200':
+          description: Пользователь в команде
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TeamMember'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/InvitationNotFound'
+        '409':
+          $ref: '#/components/responses/InvitationAlreadyProcessed'
+  /v1/team-invitations/{id}/decline:
+    parameters:
+      - $ref: '#/components/parameters/InvitationId'
+    post:
+      tags: [team]
+      operationId: declineTeamInvitation
+      summary: Отклонить приглашение в команду
+      description: Доступно приглашённому. Пользователь в команду не добавляется.
+      responses:
+        '204':
+          description: Приглашение отклонено
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/InvitationNotFound'
+        '409':
+          $ref: '#/components/responses/InvitationAlreadyProcessed'
+  /v1/clubs:
+    get:
+      tags: [clubs]
+      operationId: listClubs
+      summary: Каталог секций
+      description: |
+        Опубликованные секции по названию, с названием и описанием (#18626).
+        Поиск `query` по части названия текущей версии (pg_trgm, без учёта регистра, #18627).
+        Заблокированные секции не показываются.
+      security:
+        - {}
+        - BearerAuth: []
+      parameters:
+        - name: query
+          in: query
+          required: false
+          description: Часть названия секции
+          schema:
+            type: string
+            minLength: 1
+            maxLength: 100
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Size'
+      responses:
+        '200':
+          description: Страница каталога, при отсутствии секций - пустой список
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ClubCardPage'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+  /v1/clubs/{id}:
+    parameters:
+      - $ref: '#/components/parameters/ClubId'
+    get:
+      tags: [clubs]
+      operationId: getClub
+      summary: Страница секции
+      description: |
+        Название, описание, место и расписание встреч, контакты (#18628).
+        Мероприятия секции - `GET /v1/events?club_id=...`.
+        Для заблокированной секции ответ «Секция недоступна.»
+      security:
+        - {}
+        - BearerAuth: []
+      responses:
+        '200':
+          description: Секция
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ClubDetail'
+        '404':
+          $ref: '#/components/responses/ClubNotFound'
+    patch:
+      tags: [clubs]
+      operationId: updateClub
+      summary: Редактировать страницу секции
+      description: |
+        Доступно администратору секции (#18103). Передаются только изменяемые поля:
+        описание, место и расписание встреч, контакты. Каждое сохранение создаёт новую версию
+        страницы (`club_versions`). Фото меняется через `PUT /v1/clubs/{id}/photo`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ClubUpdate'
+            example:
+              schedule: Пятница, 18:00-21:00; суббота, 12:00-15:00
+      responses:
+        '200':
+          description: Страница секции сохранена
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ClubDetail'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/ClubForbidden'
+        '404':
+          $ref: '#/components/responses/ClubNotFound'
+        '422':
+          description: '`validation_error` - пустое описание или слишком длинные значения.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                error:
+                  code: validation_error
+                  message: Заполните обязательные поля.
+                  details:
+                    - field: description
+                      message: Заполните обязательные поля.
+  /v1/clubs/{id}/photo:
+    parameters:
+      - $ref: '#/components/parameters/ClubId'
+    get:
+      tags: [photos]
+      operationId: getClubPhoto
+      summary: Фото секции
+      security: []
+      responses:
+        '200':
+          description: Файл фото
+          content:
+            image/jpeg:
+              schema:
+                type: string
+                format: binary
+            image/png:
+              schema:
+                type: string
+                format: binary
+            image/webp:
+              schema:
+                type: string
+                format: binary
+        '404':
+          $ref: '#/components/responses/PhotoNotFound'
+    put:
+      tags: [photos]
+      operationId: uploadClubPhoto
+      summary: Загрузить фото секции
+      description: |
+        Загрузка файлом (multipart). Доступно администратору секции. Новое фото создаёт
+        новую версию страницы секции (`club_versions.photo_path`).
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/PhotoUpload'
+      responses:
+        '200':
+          description: Фото сохранено
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Photo'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/ClubForbidden'
+        '404':
+          $ref: '#/components/responses/ClubNotFound'
+        '422':
+          $ref: '#/components/responses/FileInvalid'
+    delete:
+      tags: [photos]
+      operationId: deleteClubPhoto
+      summary: Удалить фото секции
+      description: Доступно администратору секции. Клиент показывает стандартную обложку (#18103, п. 5.2).
+      responses:
+        '204':
+          description: Фото удалено
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/ClubForbidden'
+        '404':
+          $ref: '#/components/responses/ClubNotFound'
+  /v1/clubs/{id}/stats:
+    parameters:
+      - $ref: '#/components/parameters/ClubId'
+    get:
+      tags: [stats]
+      x-draft: true
+      operationId: getClubStats
+      summary: Статистика секции (черновик)
+      description: |
+        Сводка по мероприятиям секции: участники и продажи (#18105). Доступно администратору секции.
+        Число участников и данные о продажах сервис берёт у Ticketing. Если Ticketing не ответил,
+        возвращается доступная часть с `partial = true`, клиент показывает сообщение о проблеме.
+        У секции без мероприятий - нулевая сводка и пустой список.
+      responses:
+        '200':
+          description: Статистика секции
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ClubStats'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: '`forbidden` - пользователь не администратор секции.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                error:
+                  code: forbidden
+                  message: У вас нет прав на просмотр статистики секции.
+        '404':
+          $ref: '#/components/responses/ClubNotFound'
+  /internal/events/{id}:
+    parameters:
+      - $ref: '#/components/parameters/EventId'
+    get:
+      tags: [internal]
+      operationId: getEventInternal
+      summary: Мероприятие для других сервисов
+      description: |
+        Дополнение к вики. Ticketing получает дату, статус и признак бесплатного мероприятия;
+        Moderation - текущую версию текста при подаче жалобы.
+      security:
+        - ServiceToken: []
+      responses:
+        '200':
+          description: Мероприятие
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EventInternal'
+        '403':
+          $ref: '#/components/responses/ServiceTokenInvalid'
+        '404':
+          $ref: '#/components/responses/EventNotFound'
+  /internal/events/{id}/permissions:
+    parameters:
+      - $ref: '#/components/parameters/EventId'
+    get:
+      tags: [internal]
+      operationId: getEventPermissions
+      summary: Роль пользователя в команде мероприятия
+      description: Ticketing и Moderation проверяют роль пользователя на мероприятии и кешируют ответ на 30-60 секунд.
+      security:
+        - ServiceToken: []
+      parameters:
+        - $ref: '#/components/parameters/QueryUserId'
+      responses:
+        '200':
+          description: Роль пользователя
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EventPermissions'
+        '403':
+          $ref: '#/components/responses/ServiceTokenInvalid'
+        '404':
+          $ref: '#/components/responses/EventNotFound'
+  /internal/events/{id}/versions/{versionId}:
+    parameters:
+      - $ref: '#/components/parameters/EventId'
+      - $ref: '#/components/parameters/VersionId'
+    get:
+      tags: [internal]
+      operationId: getEventVersionInternal
+      summary: Версия текста мероприятия
+      description: Moderation получает текст на момент жалобы.
+      security:
+        - ServiceToken: []
+      responses:
+        '200':
+          description: Версия текста
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EventVersion'
+        '403':
+          $ref: '#/components/responses/ServiceTokenInvalid'
+        '404':
+          $ref: '#/components/responses/VersionNotFound'
+  /internal/clubs/{id}:
+    parameters:
+      - $ref: '#/components/parameters/ClubId'
+    get:
+      tags: [internal]
+      operationId: getClubInternal
+      summary: Секция для других сервисов
+      description: |
+        Дополнение к вики. Moderation проверяет, что секция существует и не заблокирована,
+        и получает текущую версию страницы при подаче жалобы. Возвращает и заблокированные секции.
+      security:
+        - ServiceToken: []
+      responses:
+        '200':
+          description: Секция
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ClubInternal'
+        '403':
+          $ref: '#/components/responses/ServiceTokenInvalid'
+        '404':
+          $ref: '#/components/responses/ClubNotFound'
+  /internal/clubs/{id}/permissions:
+    parameters:
+      - $ref: '#/components/parameters/ClubId'
+    get:
+      tags: [internal]
+      operationId: getClubPermissions
+      summary: Является ли пользователь администратором секции
+      description: Дополнение к вики. Moderation проверяет право подать заявку от имени секции (#18102).
+      security:
+        - ServiceToken: []
+      parameters:
+        - $ref: '#/components/parameters/QueryUserId'
+      responses:
+        '200':
+          description: Права пользователя на секцию
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ClubPermissions'
+        '403':
+          $ref: '#/components/responses/ServiceTokenInvalid'
+        '404':
+          $ref: '#/components/responses/ClubNotFound'
+  /internal/clubs/{id}/versions/{versionId}:
+    parameters:
+      - $ref: '#/components/parameters/ClubId'
+      - $ref: '#/components/parameters/VersionId'
+    get:
+      tags: [internal]
+      operationId: getClubVersionInternal
+      summary: Версия страницы секции
+      description: Moderation получает текст на момент жалобы.
+      security:
+        - ServiceToken: []
+      responses:
+        '200':
+          description: Версия страницы секции
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ClubVersion'
+        '403':
+          $ref: '#/components/responses/ServiceTokenInvalid'
+        '404':
+          $ref: '#/components/responses/VersionNotFound'
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: JWT RS256 проверяется каждым сервисом по публичному ключу Identity.
+    ServiceToken:
+      type: apiKey
+      in: header
+      name: X-Service-Token
+      description: Сервисный токен для путей /internal (#18886), значение из переменной окружения.
+  parameters:
+    EventId:
+      name: id
+      in: path
+      required: true
+      description: Идентификатор мероприятия (events.id)
+      schema:
+        type: string
+        format: uuid
+    ClubId:
+      name: id
+      in: path
+      required: true
+      description: Идентификатор секции (clubs.id)
+      schema:
+        type: string
+        format: uuid
+    InvitationId:
+      name: id
+      in: path
+      required: true
+      description: Идентификатор приглашения в команду (team_invitations.id)
+      schema:
+        type: string
+        format: uuid
+    VersionId:
+      name: versionId
+      in: path
+      required: true
+      description: Идентификатор версии текста (event_versions.id или club_versions.id)
+      schema:
+        type: string
+        format: uuid
+    QueryUserId:
+      name: user_id
+      in: query
+      required: true
+      description: Пользователь, права которого проверяются (identity_db.users.id)
+      schema:
+        type: string
+        format: uuid
+    Page:
+      name: page
+      in: query
+      required: false
+      description: Номер страницы, с 1
+      schema:
+        type: integer
+        minimum: 1
+        default: 1
+    Size:
+      name: size
+      in: query
+      required: false
+      description: Размер страницы
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 100
+        default: 20
+  responses:
+    Unauthorized:
+      description: '`unauthorized` - нет токена или токен недействителен.'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error:
+              code: unauthorized
+              message: Войдите, чтобы выполнить это действие.
+    ValidationError:
+      description: '`validation_error` - тело или параметры запроса не прошли проверку.'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error:
+              code: validation_error
+              message: Проверьте введённые данные.
+              details:
+                - field: size
+                  message: Значение должно быть от 1 до 100.
+    EventNotFound:
+      description: '`event_not_found` - мероприятия нет или оно недоступно.'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error:
+              code: event_not_found
+              message: Мероприятие недоступно.
+    ClubNotFound:
+      description: '`club_not_found` - секции нет или она заблокирована.'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error:
+              code: club_not_found
+              message: Секция недоступна.
+    ClubForbidden:
+      description: '`forbidden` - пользователь не администратор секции.'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error:
+              code: forbidden
+              message: У вас нет прав на редактирование секции.
+    TeamForbidden:
+      description: '`forbidden` - пользователь не владелец команды мероприятия.'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error:
+              code: forbidden
+              message: У вас нет прав на управление командой мероприятия.
+    TeamMemberNotFound:
+      description: |
+        `event_not_found` - мероприятия нет;
+        `team_member_not_found` - пользователь не состоит в команде.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error:
+              code: team_member_not_found
+              message: Пользователь не состоит в команде.
+    LastOwner:
+      description: '`last_owner` - нельзя удалить или понизить последнего владельца.'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error:
+              code: last_owner
+              message: Нельзя удалить последнего владельца команды мероприятия.
+    InvitationNotFound:
+      description: '`invitation_not_found` - приглашения нет или оно адресовано другому пользователю.'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error:
+              code: invitation_not_found
+              message: Приглашение не найдено.
+    InvitationAlreadyProcessed:
+      description: |
+        `invitation_already_processed` - на приглашение уже ответили;
+        `already_in_team` - пользователь уже в команде.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error:
+              code: invitation_already_processed
+              message: Приглашение уже обработано.
+    PhotoNotFound:
+      description: '`photo_not_found` - фото не загружено, клиент показывает стандартную обложку.'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error:
+              code: photo_not_found
+              message: Фото не найдено.
+    FileInvalid:
+      description: '`file_invalid` - файл не JPEG, PNG или WEBP либо больше 5 МБ.'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error:
+              code: file_invalid
+              message: Файл не соответствует требованиям.
+    VersionNotFound:
+      description: '`version_not_found` - версии нет или она относится к другому объекту.'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error:
+              code: version_not_found
+              message: Версия текста не найдена.
+    ServiceTokenInvalid:
+      description: '`forbidden` - нет сервисного токена или он неверный.'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error:
+              code: forbidden
+              message: Недостаточно прав.
+  schemas:
+    Error:
+      type: object
+      description: Ошибка в едином формате всех сервисов (tusumba-common, #18886)
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code:
+              type: string
+              description: Машинный код ошибки для клиента
+            message:
+              type: string
+              description: Сообщение для пользователя
+            details:
+              type: array
+              description: Ошибки по отдельным полям (для validation_error)
+              items:
+                type: object
+                required: [field, message]
+                properties:
+                  field:
+                    type: string
+                  message:
+                    type: string
+    Money:
+      type: object
+      description: Сумма в минимальных единицах валюты (копейках), как в Ticketing & Payments
+      required: [amount, currency]
+      properties:
+        amount:
+          type: integer
+          minimum: 0
+          example: 30000
+        currency:
+          type: string
+          enum: [RUB]
+    EventStatus:
+      type: string
+      description: |
+        Статус подтверждения мероприятия:
+        not_confirmed - проведение ещё не подтверждено;
+        confirmed - подтверждено;
+        held - состоялось;
+        not_held - не состоялось.
+      enum: [not_confirmed, confirmed, held, not_held]
+    TeamRole:
+      type: string
+      description: |
+        Роль в команде мероприятия:
+        owner - владелец: всё, включая управление командой;
+        admin - администратор: редактирование, продажа билетов, участники и статистика;
+        editor - редактор: редактирование мероприятия;
+        scanner - контролёр на входе (решение по роли - #18901).
+      enum: [owner, admin, editor, scanner]
+    EventCard:
+      type: object
+      description: Карточка мероприятия в каталоге
+      required: [id, title, date, place_address, is_free, status]
+      properties:
+        id:
+          type: string
+          format: uuid
+        title:
+          type: string
+          description: Название из текущей версии текста
+        date:
+          type: string
+          format: date
+        place_address:
+          type: string
+          description: Место проведения; по нему клиент строит ссылку «Показать на карте»
+        is_free:
+          type: boolean
+        price:
+          $ref: '#/components/schemas/Money'
+        status:
+          $ref: '#/components/schemas/EventStatus'
+        club_id:
+          type: string
+          format: uuid
+          nullable: true
+          description: Секция-организатор, если мероприятие проводит секция
+        photo_url:
+          type: string
+          nullable: true
+          description: Адрес фото; null - фото нет, клиент показывает стандартную обложку
+    EventCardPage:
+      type: object
+      required: [items, total, page, size]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/EventCard'
+        total:
+          type: integer
+        page:
+          type: integer
+        size:
+          type: integer
+    Organizer:
+      type: object
+      description: |
+        Организатор мероприятия:
+        club - секция (заполнены club_id и club_name);
+        user - пользователь, по заявке которого создано мероприятие (заполнен user_id).
+      required: [type]
+      properties:
+        type:
+          type: string
+          enum: [user, club]
+        user_id:
+          type: string
+          format: uuid
+        club_id:
+          type: string
+          format: uuid
+        club_name:
+          type: string
+    EventDetail:
+      description: Страница мероприятия
+      allOf:
+        - $ref: '#/components/schemas/EventCard'
+        - type: object
+          required: [description, organizer, current_version_id, version_no]
+          properties:
+            description:
+              type: string
+            organizer:
+              $ref: '#/components/schemas/Organizer'
+            current_version_id:
+              type: string
+              format: uuid
+              description: Текущая версия текста (event_versions.id)
+            version_no:
+              type: integer
+            my_role:
+              $ref: '#/components/schemas/TeamRole'
+    EventUpdate:
+      type: object
+      description: |
+        Изменяемые поля мероприятия, передаются только изменённые.
+        При `is_free = false` у мероприятия должна быть цена.
+      minProperties: 1
+      properties:
+        title:
+          type: string
+          minLength: 1
+          maxLength: 255
+        description:
+          type: string
+          minLength: 1
+          maxLength: 1000
+        date:
+          type: string
+          format: date
+          description: Не раньше сегодняшней даты
+        place_address:
+          type: string
+          minLength: 1
+          maxLength: 500
+        is_free:
+          type: boolean
+        price:
+          $ref: '#/components/schemas/Money'
+        status:
+          $ref: '#/components/schemas/EventStatus'
+    EventVersion:
+      type: object
+      description: Версия текста мероприятия
+      required: [id, event_id, version_no, title, description, edited_by, created_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+        event_id:
+          type: string
+          format: uuid
+        version_no:
+          type: integer
+        title:
+          type: string
+        description:
+          type: string
+        edited_by:
+          type: string
+          format: uuid
+          description: Автор изменения (identity_db.users.id)
+        created_at:
+          type: string
+          format: date-time
+    EventVersionPage:
+      type: object
+      required: [items, total, page, size]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/EventVersion'
+        total:
+          type: integer
+        page:
+          type: integer
+        size:
+          type: integer
+    PhotoUpload:
+      type: object
+      required: [file]
+      properties:
+        file:
+          type: string
+          format: binary
+          description: JPEG, PNG или WEBP, не больше 5 МБ
+    Photo:
+      type: object
+      required: [photo_url]
+      properties:
+        photo_url:
+          type: string
+          description: Адрес загруженного фото
+    TeamMember:
+      type: object
+      description: Участник команды мероприятия
+      required: [event_id, user_id, role, added_at]
+      properties:
+        event_id:
+          type: string
+          format: uuid
+        user_id:
+          type: string
+          format: uuid
+        role:
+          $ref: '#/components/schemas/TeamRole'
+        added_at:
+          type: string
+          format: date-time
+    TeamMemberUpdate:
+      type: object
+      required: [role]
+      properties:
+        role:
+          $ref: '#/components/schemas/TeamRole'
+    TeamInvitationStatus:
+      type: string
+      description: |
+        Статус приглашения:
+        pending - ждёт ответа;
+        accepted - принято;
+        declined - отклонено.
+      enum: [pending, accepted, declined]
+    TeamInvitationCreate:
+      type: object
+      description: Указывается ровно одно из полей user_id или email
+      required: [role]
+      properties:
+        user_id:
+          type: string
+          format: uuid
+          description: Приглашаемый зарегистрированный пользователь
+        email:
+          type: string
+          format: email
+          maxLength: 254
+          description: Email приглашаемого
+        role:
+          $ref: '#/components/schemas/TeamRole'
+    TeamInvitation:
+      type: object
+      description: Приглашение в команду мероприятия
+      required: [id, event_id, role, status, invited_by]
+      properties:
+        id:
+          type: string
+          format: uuid
+        event_id:
+          type: string
+          format: uuid
+        event_title:
+          type: string
+          description: Название мероприятия из текущей версии текста
+        invitee_user_id:
+          type: string
+          format: uuid
+          nullable: true
+        invitee_email:
+          type: string
+          nullable: true
+        role:
+          $ref: '#/components/schemas/TeamRole'
+        status:
+          $ref: '#/components/schemas/TeamInvitationStatus'
+        invited_by:
+          type: string
+          format: uuid
+          description: Кто пригласил (identity_db.users.id)
+    TeamInvitationPage:
+      type: object
+      required: [items, total, page, size]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/TeamInvitation'
+        total:
+          type: integer
+        page:
+          type: integer
+        size:
+          type: integer
+    Team:
+      type: object
+      description: Команда мероприятия
+      required: [event_id, members, invitations]
+      properties:
+        event_id:
+          type: string
+          format: uuid
+        members:
+          type: array
+          items:
+            $ref: '#/components/schemas/TeamMember'
+        invitations:
+          type: array
+          description: Приглашения в статусе pending
+          items:
+            $ref: '#/components/schemas/TeamInvitation'
+    ClubContacts:
+      type: object
+      description: Контакты секции, ключ - канал связи, значение - адрес
+      additionalProperties:
+        type: string
+      example:
+        telegram: '@nsu_boardgames'
+        email: boardgames@example.org
+    ClubCard:
+      type: object
+      description: Карточка секции в каталоге
+      required: [id, name, description]
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        description:
+          type: string
+        photo_url:
+          type: string
+          nullable: true
+    ClubCardPage:
+      type: object
+      required: [items, total, page, size]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/ClubCard'
+        total:
+          type: integer
+        page:
+          type: integer
+        size:
+          type: integer
+    ClubDetail:
+      type: object
+      description: Страница секции (текущая версия)
+      required: [id, name, description, current_version_id, version_no, is_admin]
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        description:
+          type: string
+        meeting_place:
+          type: string
+          nullable: true
+        schedule:
+          type: string
+          nullable: true
+        contacts:
+          $ref: '#/components/schemas/ClubContacts'
+        photo_url:
+          type: string
+          nullable: true
+          description: Адрес фото; null - стандартная обложка
+        current_version_id:
+          type: string
+          format: uuid
+          description: Текущая версия страницы (club_versions.id)
+        version_no:
+          type: integer
+        is_admin:
+          type: boolean
+          description: Текущий пользователь - администратор секции; для гостя false
+    ClubUpdate:
+      type: object
+      description: Изменяемые поля страницы секции, передаются только изменённые
+      minProperties: 1
+      properties:
+        description:
+          type: string
+          minLength: 1
+          maxLength: 1000
+        meeting_place:
+          type: string
+          maxLength: 500
+        schedule:
+          type: string
+          maxLength: 1000
+        contacts:
+          $ref: '#/components/schemas/ClubContacts'
+    ClubVersion:
+      type: object
+      description: Версия страницы секции
+      required: [id, club_id, version_no, name, description, edited_by, created_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+        club_id:
+          type: string
+          format: uuid
+        version_no:
+          type: integer
+        name:
+          type: string
+        description:
+          type: string
+        meeting_place:
+          type: string
+          nullable: true
+        schedule:
+          type: string
+          nullable: true
+        contacts:
+          $ref: '#/components/schemas/ClubContacts'
+        photo_url:
+          type: string
+          nullable: true
+        edited_by:
+          type: string
+          format: uuid
+        created_at:
+          type: string
+          format: date-time
+    ClubStatus:
+      type: string
+      description: |
+        Статус секции:
+        published - опубликована;
+        blocked - заблокирована, не показывается пользователям.
+      enum: [published, blocked]
+    ClubEventStats:
+      type: object
+      description: Показатели одного мероприятия секции
+      required: [event_id, title, date, is_free]
+      properties:
+        event_id:
+          type: string
+          format: uuid
+        title:
+          type: string
+        date:
+          type: string
+          format: date
+        is_free:
+          type: boolean
+        participants:
+          type: integer
+          nullable: true
+          description: Записавшиеся и купившие билет; null - данные недоступны
+        tickets_sold:
+          type: integer
+          nullable: true
+          description: Только для платного мероприятия
+        revenue:
+          $ref: '#/components/schemas/Money'
+    ClubStats:
+      type: object
+      description: Сводная статистика секции
+      required: [club_id, events_total, partial, events, updated_at]
+      properties:
+        club_id:
+          type: string
+          format: uuid
+        events_total:
+          type: integer
+        participants_total:
+          type: integer
+          nullable: true
+        tickets_sold_total:
+          type: integer
+          nullable: true
+          description: Отсутствует, если у секции только бесплатные мероприятия
+        revenue_total:
+          $ref: '#/components/schemas/Money'
+        partial:
+          type: boolean
+          description: true - часть данных недоступна (Ticketing не ответил)
+        events:
+          type: array
+          items:
+            $ref: '#/components/schemas/ClubEventStats'
+        updated_at:
+          type: string
+          format: date-time
+    EventInternal:
+      type: object
+      description: Мероприятие для других сервисов
+      required: [id, title, date, place_address, is_free, status, created_by_user_id, current_version_id]
+      properties:
+        id:
+          type: string
+          format: uuid
+        title:
+          type: string
+        date:
+          type: string
+          format: date
+        place_address:
+          type: string
+        is_free:
+          type: boolean
+        price:
+          $ref: '#/components/schemas/Money'
+        status:
+          $ref: '#/components/schemas/EventStatus'
+        club_id:
+          type: string
+          format: uuid
+          nullable: true
+        created_by_user_id:
+          type: string
+          format: uuid
+        current_version_id:
+          type: string
+          format: uuid
+    EventPermissions:
+      type: object
+      description: Роль пользователя в команде мероприятия
+      required: [event_id, user_id, is_member]
+      properties:
+        event_id:
+          type: string
+          format: uuid
+        user_id:
+          type: string
+          format: uuid
+        is_member:
+          type: boolean
+          description: Пользователь состоит в команде
+        role:
+          $ref: '#/components/schemas/TeamRole'
+    ClubInternal:
+      type: object
+      description: Секция для других сервисов
+      required: [id, name, status, current_version_id]
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        status:
+          $ref: '#/components/schemas/ClubStatus'
+        current_version_id:
+          type: string
+          format: uuid
+    ClubPermissions:
+      type: object
+      description: Права пользователя на секцию
+      required: [club_id, user_id, is_admin]
+      properties:
+        club_id:
+          type: string
+          format: uuid
+        user_id:
+          type: string
+          format: uuid
+        is_admin:
+          type: boolean
+          description: Пользователь - администратор секции (club_admins)

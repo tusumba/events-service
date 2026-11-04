@@ -36,6 +36,8 @@ Python 3.12, FastAPI, SQLAlchemy 2 (async), Alembic, PostgreSQL 16 (расшир
 
 ## Документация
 
+- [OpenAPI v1](docs/openapi.yaml) - API разделов «Каталог и поиск», «Мероприятия и секции», статистика секции и внутренние вызовы архитектуры.
+
 Wiki проекта: https://ai.nsu.ru/projects/tusumba/wiki/Архитектура. Контракт API: OpenAPI v1 (#18891). Задачи ведутся в Redmine: https://ai.nsu.ru/projects/tusumba. Issues и Wiki GitHub выключены.
 
 ## Правила работы
