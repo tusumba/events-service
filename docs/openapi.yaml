@@ -31,12 +31,14 @@ info:
     и кешируют ответ в Redis на 30-60 секунд. В команде всегда остаётся хотя бы один владелец.
     Роль `scanner` («контролёр на входе») - по ER-диаграмме; решение, нужна ли она, принимается в #18901.
 
-    **Дополнения к вики** (нужны для работы других сервисов и клиентов, согласовать):
-    - `GET /internal/events/{id}` - Ticketing получает дату и статус мероприятия, Moderation - текущую версию текста для жалобы;
+    **Внутренние вызовы** (`/internal`, сервисный токен):
+    - `GET /internal/events/{id}` - Identity проверяет мероприятие при приглашении друга, Ticketing получает
+      дату, статус и признак бесплатного мероприятия, Moderation - текущую версию текста для жалобы;
+    - `GET /internal/events/{id}/permissions` - Ticketing и Moderation проверяют роль пользователя на мероприятии;
     - `GET /internal/clubs/{id}`, `GET /internal/clubs/{id}/permissions` - Moderation проверяет секцию для жалобы
       и право подать заявку от имени секции (#18102);
-    - `GET /v1/team-invitations` - приглашённый видит свои приглашения в команду;
-    - `GET` и `DELETE` для фото - показ фото и возврат стандартной обложки (#18103, п. 5.2).
+    - `GET /internal/events/{id}/versions/{versionId}`, `GET /internal/clubs/{id}/versions/{versionId}` -
+      Moderation получает текст на момент жалобы.
 
     Общие правила:
     - списки: параметры `page` (с 1) и `size` (по умолчанию 20, максимум 100), ответ `items`, `total`, `page`, `size`;
@@ -752,7 +754,8 @@ paths:
       operationId: getEventInternal
       summary: Мероприятие для других сервисов
       description: |
-        Дополнение к вики. Ticketing получает дату, статус и признак бесплатного мероприятия;
+        Identity проверяет, что мероприятие существует, при приглашении друга на него;
+        Ticketing получает дату, статус и признак бесплатного мероприятия;
         Moderation - текущую версию текста при подаче жалобы.
       security:
         - ServiceToken: []
@@ -820,7 +823,7 @@ paths:
       operationId: getClubInternal
       summary: Секция для других сервисов
       description: |
-        Дополнение к вики. Moderation проверяет, что секция существует и не заблокирована,
+        Moderation проверяет, что секция существует и не заблокирована,
         и получает текущую версию страницы при подаче жалобы. Возвращает и заблокированные секции.
       security:
         - ServiceToken: []
@@ -842,7 +845,7 @@ paths:
       tags: [internal]
       operationId: getClubPermissions
       summary: Является ли пользователь администратором секции
-      description: Дополнение к вики. Moderation проверяет право подать заявку от имени секции (#18102).
+      description: Moderation проверяет право подать заявку от имени секции (#18102).
       security:
         - ServiceToken: []
       parameters:
