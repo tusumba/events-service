@@ -30,9 +30,40 @@
 
 Python 3.12, FastAPI, SQLAlchemy 2 (async), Alembic, PostgreSQL 16 (расширение `pg_trgm`), RabbitMQ (FastStream).
 
+## Что уже сделано
+
+- таблицы `events` и `event_versions` в схеме PostgreSQL `events` (миграция Alembic);
+- `GET /v1/events` - каталог: опубликованные мероприятия с сегодняшней даты (по Новосибирску), ближайшие выше, пагинация `page` и `size`.
+
+Поиск и фильтры каталога, страница мероприятия, секции, команда и остальное API из OpenAPI - в следующих задачах.
+
 ## Запуск
 
-Описание появится после готовности шаблона сервиса (#18887) и стенда (#18905). Окружение целиком поднимается из репозитория `deploy`.
+Сервис создан из [service-template](https://github.com/tusumba/service-template) (#18887). Нужны [uv](https://docs.astral.sh/uv/) и Docker.
+
+```bash
+uv sync
+cp .env.example .env
+uv run python -m tusumba_common.testing dev-keys   # тестовая пара ключей, впишите public.pem в JWT_PUBLIC_KEY
+docker compose up -d postgres
+uv run alembic upgrade head
+uv run --env-file .env uvicorn app.main:create_app --factory --reload
+```
+
+Сервис: http://127.0.0.1:8000/health, каталог: http://127.0.0.1:8000/v1/events, документация API: http://127.0.0.1:8000/docs.
+
+Всё в Docker: `docker compose up --build`. Окружение целиком поднимается из репозитория `deploy` (#18905).
+
+## Проверки
+
+```bash
+uv run ruff format .
+uv run ruff check .
+uv run mypy app tests migrations
+uv run pytest
+```
+
+Тестам нужен Docker: PostgreSQL поднимается через testcontainers.
 
 ## Документация
 
