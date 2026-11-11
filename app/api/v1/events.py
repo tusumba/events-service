@@ -5,6 +5,7 @@ from fastapi import APIRouter, Depends, Query
 from tusumba_common import CurrentUser, optional_user
 
 from app.db import Session
+from app.repositories.events import EventFilters
 from app.schemas.events import EventCardPage
 from app.services import events
 
@@ -19,4 +20,4 @@ async def list_events(
     page: Annotated[int, Query(ge=1, description="Номер страницы, с 1")] = 1,
     size: Annotated[int, Query(ge=1, le=100, description="Размер страницы")] = 20,
 ) -> EventCardPage:
-    return await events.list_events(session, today, page, size)
+    return await events.list_events(session, EventFilters(date_from=today), page, size)
