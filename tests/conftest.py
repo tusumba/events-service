@@ -1,3 +1,4 @@
+import os
 from collections.abc import AsyncIterator, Iterator
 from pathlib import Path
 
@@ -19,6 +20,10 @@ POSTGRES_IMAGE = "postgres:16-alpine"
 
 @pytest.fixture(scope="session")
 def database_url() -> Iterator[str]:
+    # TEST_DATABASE_URL позволяет прогнать тесты без Docker на уже запущенном PostgreSQL.
+    if existing := os.environ.get("TEST_DATABASE_URL"):
+        yield existing
+        return
     with PostgresContainer(POSTGRES_IMAGE, driver="asyncpg") as postgres:
         yield postgres.get_connection_url()
 
