@@ -28,7 +28,10 @@ async def api(
 ) -> AsyncIterator[httpx2.AsyncClient]:
     monkeypatch.setenv("JWT_PUBLIC_KEY", keypair[1])
     monkeypatch.setenv("SERVICE_TOKEN", SERVICE_TOKEN)
-    settings = Settings(database_url="postgresql+asyncpg://test:test@localhost:5432/test")
+    settings = Settings(
+        database_url="postgresql+asyncpg://test:test@localhost:5432/test",
+        rabbitmq_url="amqp://guest:guest@localhost:5672/",
+    )
     transport = httpx2.ASGITransport(app=create_app(settings))
     async with httpx2.AsyncClient(transport=transport, base_url="http://test") as client:
         yield client

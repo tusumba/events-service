@@ -37,6 +37,7 @@ Python 3.12, FastAPI, SQLAlchemy 2 (async), Alembic, PostgreSQL 16 (расшир
 - `GET /v1/events` - каталог: опубликованные мероприятия с сегодняшней даты (по Новосибирску), ближайшие выше, пагинация `page` и `size`.
 - фильтры каталога: тип `is_free`, даты `date_from` и `date_to`, часть адреса `place`, статусы подтверждения `status` (можно несколько); применяются вместе и с пагинацией.
 - `GET /v1/events/{id}` - страница мероприятия: текущая версия текста, дата, место, цена, организатор (секция или пользователь), `my_role` для участника команды; 404 `event_not_found` для несуществующего и удалённого мероприятия.
+- приём `ApplicationApproved` из RabbitMQ (очередь `events.applications`): мероприятие и первая версия текста создаются из данных заявки, автор становится владельцем (`owner`), в outbox записывается `EventPublished`; повторное событие не создаёт дубль (#19044). Заявки на страницы секций - в #19047.
 
 Поиск по названию и фильтр по секции `club_id`, название секции-организатора на странице мероприятия, секции (в том числе `GET /internal/clubs/{id}/permissions` - после #19045), управление командой и остальное API из OpenAPI - в следующих задачах.
 
@@ -48,10 +49,22 @@ Python 3.12, FastAPI, SQLAlchemy 2 (async), Alembic, PostgreSQL 16 (расшир
 uv sync
 cp .env.example .env
 uv run python -m tusumba_common.testing dev-keys
-docker compose up -d postgres
+docker compose up -d postgres rabbitmq
 uv run alembic upgrade head
 uv run --env-file .env uvicorn app.main:create_app --factory --reload
 ```
+
+## События
+
+Доставка событий - из service-template (#19053), `app/events.py`:
+
+- `enqueue_event(session, event)` записывает событие в `outbox_messages` в той же транзакции, что и изменение данных;
+  APScheduler раз в `OUTBOX_POLL_SECONDS` (по умолчанию 1 с) отправляет ожидающие записи в RabbitMQ;
+- `subscribe_event(...)` подписывает обработчик на очередь; его изменения и id события в `processed_events`
+  фиксируются одной транзакцией, повтор с тем же `event_id` пропускается, при ошибке сообщение возвращается в очередь.
+
+Подписки сервиса - `app/consumers/__init__.py`. Нужна переменная `RABBITMQ_URL`, например `amqp://guest:guest@localhost:5672/`.
+Тесты поднимают RabbitMQ через testcontainers (или берут `TEST_RABBITMQ_URL`).
 
 ## Проверки
 
