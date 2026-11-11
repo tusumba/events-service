@@ -33,9 +33,10 @@ Python 3.12, FastAPI, SQLAlchemy 2 (async), Alembic, PostgreSQL 16 (расшир
 ## Что уже сделано
 
 - таблицы `events` и `event_versions` в схеме PostgreSQL `events` (миграция Alembic);
+- таблица `event_team_members` и `GET /internal/events/{id}/permissions?user_id=` - роль пользователя в команде мероприятия (`owner`, `admin`, `editor`, `scanner`; `is_member = false`, если его нет в команде), 404 `event_not_found` для несуществующего и удалённого мероприятия; клиент с кешем Redis - `PermissionsClient` в tusumba-common (#19039);
 - `GET /v1/events` - каталог: опубликованные мероприятия с сегодняшней даты (по Новосибирску), ближайшие выше, пагинация `page` и `size`.
 
-Поиск и фильтры каталога, страница мероприятия, секции, команда и остальное API из OpenAPI - в следующих задачах.
+Поиск и фильтры каталога, страница мероприятия, секции (в том числе `GET /internal/clubs/{id}/permissions` - после #19045), управление командой и остальное API из OpenAPI - в следующих задачах.
 
 ## Запуск
 
