@@ -3,7 +3,7 @@ import datetime as dt
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import Event, EventVersion
-from app.repositories.events import EventRepository
+from app.repositories.events import EventFilters, EventRepository
 from app.schemas.events import EventCard, EventCardPage, Money
 
 # «Сегодня» считается по Новосибирску (OpenAPI). Перехода на летнее время там нет с 2014 года.
@@ -29,9 +29,11 @@ def to_card(event: Event, version: EventVersion) -> EventCard:
     )
 
 
-async def list_events(session: AsyncSession, today: dt.date, page: int, size: int) -> EventCardPage:
+async def list_events(
+    session: AsyncSession, filters: EventFilters, page: int, size: int
+) -> EventCardPage:
     rows, total = await EventRepository(session).catalog(
-        date_from=today, offset=(page - 1) * size, limit=size
+        filters, offset=(page - 1) * size, limit=size
     )
     return EventCardPage(
         items=[to_card(event, version) for event, version in rows],
