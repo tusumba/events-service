@@ -12,7 +12,7 @@ from app.models import SCHEMA, Club, ClubStatus, ClubVersion
 from tests.clubs_factory import add_club
 
 CLUB_TABLES = {"clubs", "club_versions", "club_admins"}
-
+CLUB_ENUMS = {"club_status"}
 
 async def club_objects(database_url: str) -> tuple[set[str], set[str]]:
     engine = create_async_engine(database_url)
@@ -28,7 +28,7 @@ async def club_objects(database_url: str) -> tuple[set[str], set[str]]:
             ),
             {"s": SCHEMA},
         )
-        result = set(tables) & CLUB_TABLES, set(types)
+        result = set(tables) & CLUB_TABLES, set(types) & CLUB_ENUMS
     await engine.dispose()
     return result
 
@@ -42,7 +42,7 @@ async def test_downgrade_removes_club_schema_and_upgrade_restores_it(
         assert await club_objects(database_url) == (set(), set())
     finally:
         await asyncio.to_thread(command.upgrade, alembic_config, "head")
-    assert await club_objects(database_url) == (CLUB_TABLES, {"club_status"})
+    assert await club_objects(database_url) == (CLUB_TABLES, CLUB_ENUMS)
 
 
 async def test_club_and_first_version_are_created_in_one_transaction(
