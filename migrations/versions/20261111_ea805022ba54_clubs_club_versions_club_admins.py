@@ -14,7 +14,7 @@ from sqlalchemy.dialects import postgresql
 from app.models import SCHEMA
 
 revision: str = "ea805022ba54"
-down_revision: str | None = None
+down_revision: str | None = "d1227d8ef185"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
