@@ -1,13 +1,14 @@
 import datetime as dt
+import uuid
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Path, Query
 from tusumba_common import CurrentUser, optional_user
 
 from app.db import Session
 from app.models import EventStatus
 from app.repositories.events import EventFilters
-from app.schemas.events import EventCardPage
+from app.schemas.events import EventCardPage, EventDetail
 from app.services import events
 
 router = APIRouter(prefix="/events", tags=["events"])
@@ -44,3 +45,12 @@ async def list_events(
         statuses=status or (),
     )
     return await events.list_events(session, filters, page, size)
+
+
+@router.get("/{id}", operation_id="getEvent", summary="Страница мероприятия")
+async def get_event(
+    session: Session,
+    user: Annotated[CurrentUser | None, Depends(optional_user)],
+    event_id: Annotated[uuid.UUID, Path(alias="id")],
+) -> EventDetail:
+    return await events.get_event(session, event_id, user)
