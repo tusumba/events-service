@@ -6,7 +6,6 @@ from pydantic import BaseModel
 from tusumba_common import ApiError, CurrentUser, optional_user
 
 from app.db import Session
-from app.models import ClubVersion
 from app.repositories.clubs import get_published_club, is_club_admin, list_published_clubs
 
 router = APIRouter(prefix="/clubs", tags=["clubs"])
@@ -45,10 +44,6 @@ def club_not_found() -> ApiError:
     return ApiError(404, "club_not_found", "Секция недоступна.")
 
 
-def photo_url(version: ClubVersion) -> str | None:
-    return f"/v1/clubs/{version.club_id}/photo" if version.photo_path else None
-
-
 def parse_uuid(value: str) -> uuid.UUID | None:
     try:
         return uuid.UUID(value)
@@ -72,7 +67,7 @@ async def list_clubs(
             id=version.club_id,
             name=version.name,
             description=version.description,
-            photo_url=photo_url(version),
+            photo_url=None,
         )
         for version in versions
     ]
@@ -98,7 +93,7 @@ async def get_club(
         meeting_place=version.meeting_place,
         schedule=version.schedule,
         contacts=version.contacts,
-        photo_url=photo_url(version),
+        photo_url=None,
         current_version_id=version.id,
         version_no=version.version_no,
         is_admin=user_id is not None and await is_club_admin(db, version.club_id, user_id),

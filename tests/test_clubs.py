@@ -47,27 +47,30 @@ async def test_catalog_shows_only_published_clubs_sorted_by_name(
 
 
 async def test_catalog_card_fields(client: httpx2.AsyncClient, session: AsyncSession) -> None:
-    with_photo = await add_club(
-        session, "Фотоклуб", description="Снимаем город", photo_path="clubs/1.jpg"
-    )
-    without_photo = await add_club(session, "Шахматы", description="Играем по средам")
+    club = await add_club(session, "Шахматы", description="Играем по средам")
 
     page = await catalog(client)
 
     assert page["items"] == [
         {
-            "id": str(with_photo.id),
-            "name": "Фотоклуб",
-            "description": "Снимаем город",
-            "photo_url": f"/v1/clubs/{with_photo.id}/photo",
-        },
-        {
-            "id": str(without_photo.id),
+            "id": str(club.id),
             "name": "Шахматы",
             "description": "Играем по средам",
             "photo_url": None,
         },
     ]
+
+
+async def test_photo_url_is_null_even_when_version_has_photo(
+    client: httpx2.AsyncClient, session: AsyncSession
+) -> None:
+    club = await add_club(session, "Фотоклуб", photo_path="clubs/photo.jpg")
+
+    [card] = (await catalog(client))["items"]
+    page = (await client.get(f"/v1/clubs/{club.id}")).json()
+
+    assert card["photo_url"] is None
+    assert page["photo_url"] is None
 
 
 async def test_catalog_paginates(client: httpx2.AsyncClient, session: AsyncSession) -> None:
@@ -146,7 +149,6 @@ async def test_club_page_shows_current_version(
         meeting_place="Ауд. 101",
         schedule="Вторник, 19:00",
         contacts={"telegram": "@nsu_choir"},
-        photo_path="clubs/choir.jpg",
     )
 
     response = await client.get(f"/v1/clubs/{club.id}")
@@ -159,7 +161,7 @@ async def test_club_page_shows_current_version(
         "meeting_place": "Ауд. 101",
         "schedule": "Вторник, 19:00",
         "contacts": {"telegram": "@nsu_choir"},
-        "photo_url": f"/v1/clubs/{club.id}/photo",
+        "photo_url": None,
         "current_version_id": str(current.id),
         "version_no": 2,
         "is_admin": False,
