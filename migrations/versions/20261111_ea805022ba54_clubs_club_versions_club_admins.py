@@ -1,7 +1,7 @@
 """clubs, club_versions, club_admins
 
 Revision ID: ea805022ba54
-Revises:
+Revises: 7b3d1e2f9a60
 Create Date: 2026-11-11 01:01:38.694436
 """
 
@@ -14,7 +14,7 @@ from sqlalchemy.dialects import postgresql
 from app.models import SCHEMA
 
 revision: str = "ea805022ba54"
-down_revision: str | None = "d1227d8ef185"
+down_revision: str | None = "7b3d1e2f9a60"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
