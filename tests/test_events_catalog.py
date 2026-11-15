@@ -1,5 +1,4 @@
 import datetime as dt
-import uuid
 from collections.abc import AsyncIterator
 from decimal import Decimal
 
@@ -11,6 +10,7 @@ from tusumba_common.testing import generate_keypair, make_token
 
 from app.models import EventStatus
 from app.services.events import today_in_novosibirsk
+from tests.clubs_factory import add_club
 from tests.events_factory import TODAY, add_event, add_version
 
 DAY = dt.timedelta(days=1)
@@ -34,7 +34,7 @@ async def test_empty_catalog_returns_empty_list(api: httpx2.AsyncClient) -> None
 
 
 async def test_card_of_paid_event(api: httpx2.AsyncClient, session: AsyncSession) -> None:
-    club_id = uuid.uuid4()
+    club_id = (await add_club(session, "Оркестр")).id
     event = await add_event(
         session,
         title="Концерт",

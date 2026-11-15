@@ -71,6 +71,12 @@ async def test_current_version_must_exist(session: AsyncSession) -> None:
             await session.execute(text("SET CONSTRAINTS ALL IMMEDIATE"))
 
 
+async def test_event_club_must_exist(session: AsyncSession) -> None:
+    with pytest.raises(IntegrityError, match="fk_events_club_id_clubs"):
+        async with session.begin_nested():
+            await add_event(session, club_id=uuid.uuid4())
+
+
 @pytest.mark.parametrize(
     ("is_free", "price"),
     [(True, Decimal("300.00")), (False, None), (False, Decimal("0"))],

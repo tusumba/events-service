@@ -42,6 +42,15 @@ def upgrade() -> None:
         sa.PrimaryKeyConstraint("id", name=op.f("pk_clubs")),
         schema=SCHEMA,
     )
+    op.create_foreign_key(
+        op.f("fk_events_club_id_clubs"),
+        "events",
+        "clubs",
+        ["club_id"],
+        ["id"],
+        source_schema=SCHEMA,
+        referent_schema=SCHEMA,
+    )
     op.create_table(
         "club_versions",
         sa.Column("id", sa.Uuid(), nullable=False),
@@ -128,6 +137,7 @@ def downgrade() -> None:
         schema=SCHEMA,
     )
     op.drop_table("club_versions", schema=SCHEMA)
+    op.drop_constraint(op.f("fk_events_club_id_clubs"), "events", type_="foreignkey", schema=SCHEMA)
     op.drop_table("clubs", schema=SCHEMA)
     club_status.drop(op.get_bind())
     # pg_trgm не удаляется: расширение общее для всей базы, его ставит deploy/postgres/init.sh.

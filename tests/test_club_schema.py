@@ -13,6 +13,24 @@ from tests.clubs_factory import add_club
 
 CLUB_TABLES = {"clubs", "club_versions", "club_admins"}
 CLUB_ENUMS = {"club_status"}
+EVENTS_REVISION = "d1227d8ef185"
+
+
+async def event_foreign_keys(database_url: str) -> set[str]:
+    engine = create_async_engine(database_url)
+    async with engine.connect() as connection:
+        names = await connection.scalars(
+            text(
+                "SELECT constraint_name FROM information_schema.table_constraints "
+                "WHERE table_schema = :s AND table_name = 'events' "
+                "AND constraint_type = 'FOREIGN KEY'"
+            ),
+            {"s": SCHEMA},
+        )
+        result = set(names)
+    await engine.dispose()
+    return result
+
 
 async def club_objects(database_url: str) -> tuple[set[str], set[str]]:
     engine = create_async_engine(database_url)
@@ -43,6 +61,19 @@ async def test_downgrade_removes_club_schema_and_upgrade_restores_it(
     finally:
         await asyncio.to_thread(command.upgrade, alembic_config, "head")
     assert await club_objects(database_url) == (CLUB_TABLES, CLUB_ENUMS)
+
+
+@pytest.mark.usefixtures("migrated")
+async def test_downgrade_to_events_revision_drops_event_club_key(
+    alembic_config: Config, database_url: str
+) -> None:
+    try:
+        await asyncio.to_thread(command.downgrade, alembic_config, EVENTS_REVISION)
+        assert await club_objects(database_url) == (set(), set())
+        assert "fk_events_club_id_clubs" not in await event_foreign_keys(database_url)
+    finally:
+        await asyncio.to_thread(command.upgrade, alembic_config, "head")
+    assert "fk_events_club_id_clubs" in await event_foreign_keys(database_url)
 
 
 async def test_club_and_first_version_are_created_in_one_transaction(
