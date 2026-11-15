@@ -4,7 +4,14 @@ from decimal import Decimal
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import Event, EventStatus, EventVersion, LifecycleStatus
+from app.models import (
+    Event,
+    EventStatus,
+    EventTeamMember,
+    EventVersion,
+    LifecycleStatus,
+    TeamRole,
+)
 
 TODAY = dt.date(2026, 11, 11)
 
@@ -63,3 +70,12 @@ async def add_version(session: AsyncSession, event: Event, title: str) -> EventV
     event.current_version_id = version.id
     await session.flush()
     return version
+
+
+async def add_member(
+    session: AsyncSession, event: Event, role: TeamRole, user_id: uuid.UUID | None = None
+) -> uuid.UUID:
+    user_id = user_id or uuid.uuid4()
+    session.add(EventTeamMember(event_id=event.id, user_id=user_id, role=role))
+    await session.flush()
+    return user_id

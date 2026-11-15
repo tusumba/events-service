@@ -1,3 +1,4 @@
+import os
 from collections.abc import AsyncIterator, Iterator
 from pathlib import Path
 
@@ -8,6 +9,7 @@ from alembic.config import Config
 from fastapi import FastAPI
 from sqlalchemy.ext.asyncio import AsyncSession
 from testcontainers.community.postgres import PostgresContainer
+from testcontainers.community.rabbitmq import RabbitMqContainer
 
 from app.db import create_engine, get_session
 from app.main import create_app
@@ -15,12 +17,28 @@ from app.settings import Settings
 
 SERVICE_DIR = Path(__file__).resolve().parents[1]
 POSTGRES_IMAGE = "postgres:16-alpine"
+RABBITMQ_IMAGE = "rabbitmq:3.13-alpine"
 
 
 @pytest.fixture(scope="session")
 def database_url() -> Iterator[str]:
+    # TEST_DATABASE_URL позволяет прогнать тесты без Docker на уже запущенном PostgreSQL.
+    if existing := os.environ.get("TEST_DATABASE_URL"):
+        yield existing
+        return
     with PostgresContainer(POSTGRES_IMAGE, driver="asyncpg") as postgres:
         yield postgres.get_connection_url()
+
+
+@pytest.fixture(scope="session")
+def rabbitmq_url() -> Iterator[str]:
+    # TEST_RABBITMQ_URL - уже запущенный RabbitMQ, как TEST_DATABASE_URL для PostgreSQL.
+    if existing := os.environ.get("TEST_RABBITMQ_URL"):
+        yield existing
+        return
+    with RabbitMqContainer(RABBITMQ_IMAGE) as rabbitmq:
+        params = rabbitmq.get_connection_params()
+        yield f"amqp://guest:guest@{params.host}:{params.port}/"
 
 
 @pytest.fixture(scope="session")
@@ -38,11 +56,12 @@ def migrated(alembic_config: Config) -> None:
 
 
 @pytest.fixture
-def settings(database_url: str, migrated: None) -> Settings:
+def settings(database_url: str, rabbitmq_url: str, migrated: None) -> Settings:
     return Settings(
         service_name="events",
         environment="test",
         database_url=database_url,
+        rabbitmq_url=rabbitmq_url,
     )
 
 
