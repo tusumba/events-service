@@ -28,6 +28,7 @@ from app.models import Event, EventTeamMember, EventVersion, OutboxMessage, Proc
 from app.services.events import today_in_novosibirsk
 from app.services.publication import handle_application_approved
 from app.settings import Settings
+from tests.clubs_factory import add_club
 from tests.events_factory import TODAY
 
 
@@ -132,7 +133,7 @@ async def test_event_published_goes_to_outbox(session: AsyncSession) -> None:
 
 
 async def test_free_event_from_club(session: AsyncSession) -> None:
-    club_id = uuid.uuid4()
+    club_id = (await add_club(session, "Шахматы")).id
     data = EventApplicationData(
         title="Турнир", description="Шахматы", date=TODAY, place_address="НГУ", is_free=True
     )

@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from tusumba_common.testing import generate_keypair, make_token
 
 from app.models import EventStatus, TeamRole
+from tests.clubs_factory import add_club
 from tests.events_factory import TODAY, add_event, add_member, add_version
 
 
@@ -60,7 +61,7 @@ async def test_free_event_has_no_price(client: httpx2.AsyncClient, session: Asyn
 
 
 async def test_club_is_organizer(client: httpx2.AsyncClient, session: AsyncSession) -> None:
-    club_id = uuid.uuid4()
+    club_id = (await add_club(session, "Шахматы")).id
     event = await add_event(session, club_id=club_id)
 
     body = (await client.get(f"/v1/events/{event.id}")).json()

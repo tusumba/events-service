@@ -75,8 +75,7 @@ class Event(Base):
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
     current_version_id: Mapped[uuid.UUID]
     created_by_user_id: Mapped[uuid.UUID]
-    # FK на clubs.id появится вместе с таблицей clubs (#19045).
-    club_id: Mapped[uuid.UUID | None] = mapped_column(index=True)
+    club_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("clubs.id"), index=True)
     organizer_name: Mapped[str | None] = mapped_column(String(255))
     status: Mapped[EventStatus] = mapped_column(
         Enum(EventStatus, name="event_status", values_callable=lambda e: [m.value for m in e]),
