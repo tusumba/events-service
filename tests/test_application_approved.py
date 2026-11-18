@@ -11,6 +11,7 @@ from fastapi import FastAPI
 from faststream.rabbit import RabbitBroker
 from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+from tusumba_common.testing import generate_keypair, make_token
 from tusumba_contracts import (
     ApplicationApproved,
     BaseEvent,
@@ -24,7 +25,18 @@ from tusumba_contracts import (
 from app.consumers import register_consumers
 from app.db import create_engine, create_sessionmaker
 from app.events import EVENT_EXCHANGE, process_event
-from app.models import Event, EventTeamMember, EventVersion, OutboxMessage, ProcessedEvent, TeamRole
+from app.models import (
+    Club,
+    ClubAdmin,
+    ClubStatus,
+    ClubVersion,
+    Event,
+    EventTeamMember,
+    EventVersion,
+    OutboxMessage,
+    ProcessedEvent,
+    TeamRole,
+)
 from app.services.events import today_in_novosibirsk
 from app.services.publication import handle_application_approved
 from app.settings import Settings
@@ -180,19 +192,107 @@ async def test_new_message_for_existing_event_is_ignored(
     assert len(await published_for(session, first.payload.result_object_id)) == 1
 
 
-async def test_club_page_application_is_skipped(
+def club_approved(**overrides: Any) -> EventEnvelope[ApplicationApproved]:
+    club_page = ClubPageApplicationData(
+        name="Шахматный клуб",
+        description="Играем по средам",
+        meeting_place="Ауд. 3107",
+        schedule="Среда, 18:00",
+        contacts={"telegram": "@nsu_chess"},
+    )
+    return approved(type="club_page", event=None, club_page=club_page, **overrides)
+
+
+async def club_rows(session: AsyncSession, club_id: uuid.UUID) -> tuple[int, int, int]:
+    clubs = await session.scalar(select(func.count()).where(Club.id == club_id))
+    versions = await session.scalar(select(func.count()).where(ClubVersion.club_id == club_id))
+    admins = await session.scalar(select(func.count()).where(ClubAdmin.club_id == club_id))
+    return clubs or 0, versions or 0, admins or 0
+
+
+async def test_club_is_created_with_first_version_and_admin(session: AsyncSession) -> None:
+    envelope = club_approved()
+    payload = envelope.payload
+
+    await handle(session, envelope)
+
+    club = await session.get(Club, payload.result_object_id)
+    assert club is not None
+    assert club.status == ClubStatus.PUBLISHED
+    version = await session.get(ClubVersion, club.current_version_id)
+    assert version is not None
+    assert (version.club_id, version.version_no) == (club.id, 1)
+    assert (version.name, version.description) == ("Шахматный клуб", "Играем по средам")
+    assert (version.meeting_place, version.schedule) == ("Ауд. 3107", "Среда, 18:00")
+    assert version.contacts == {"telegram": "@nsu_chess"}
+    assert version.photo_path is None
+    assert version.edited_by == payload.author_user_id
+    assert await session.get(ClubAdmin, (payload.author_user_id, club.id)) is not None
+    assert await events_with_id(session, payload.result_object_id) == 0
+    assert await published_for(session, payload.result_object_id) == []
+
+
+async def test_club_without_optional_fields(session: AsyncSession) -> None:
+    club_page = ClubPageApplicationData(name="Хор", description="Поём классику")
+    envelope = approved(type="club_page", event=None, club_page=club_page)
+
+    await handle(session, envelope)
+
+    club = await session.get(Club, envelope.payload.result_object_id)
+    assert club is not None
+    version = await session.get(ClubVersion, club.current_version_id)
+    assert version is not None
+    assert (version.meeting_place, version.schedule, version.contacts) == (None, None, {})
+
+
+async def test_repeated_delivery_does_not_create_second_club(
     session: AsyncSession, sessions: async_sessionmaker[AsyncSession]
 ) -> None:
-    envelope = approved(
-        type="club_page",
-        event=None,
-        club_page=ClubPageApplicationData(name="Шахматный клуб", description="Играем по средам"),
-    )
+    envelope = club_approved()
 
     assert await process_event(sessions, message(envelope), handle_application_approved) is True
+    assert await process_event(sessions, message(envelope), handle_application_approved) is False
 
-    assert await events_with_id(session, envelope.payload.result_object_id) == 0
-    assert await published_for(session, envelope.payload.result_object_id) == []
+    assert await club_rows(session, envelope.payload.result_object_id) == (1, 1, 1)
+
+
+async def test_new_message_for_existing_club_is_ignored(
+    session: AsyncSession, sessions: async_sessionmaker[AsyncSession]
+) -> None:
+    first = club_approved()
+    again = club_approved(
+        application_id=first.payload.application_id,
+        author_user_id=first.payload.author_user_id,
+        result_object_id=first.payload.result_object_id,
+    )
+    assert again.event_id != first.event_id
+
+    assert await process_event(sessions, message(first), handle_application_approved) is True
+    assert await process_event(sessions, message(again), handle_application_approved) is True
+
+    assert await club_rows(session, first.payload.result_object_id) == (1, 1, 1)
+
+
+async def test_created_club_appears_in_catalog_and_author_is_admin(
+    client: httpx2.AsyncClient,
+    sessions: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    private_key, public_key = generate_keypair()
+    monkeypatch.setenv("JWT_PUBLIC_KEY", public_key)
+    envelope = club_approved()
+    payload = envelope.payload
+
+    await process_event(sessions, message(envelope), handle_application_approved)
+
+    [card] = (await client.get("/v1/clubs")).json()["items"]
+    assert (card["id"], card["name"]) == (str(payload.result_object_id), "Шахматный клуб")
+    token = make_token(private_key, user_id=str(payload.author_user_id))
+    page = await client.get(
+        f"/v1/clubs/{payload.result_object_id}", headers={"Authorization": f"Bearer {token}"}
+    )
+    assert page.status_code == 200
+    assert page.json()["is_admin"] is True
 
 
 async def test_created_event_appears_in_catalog(

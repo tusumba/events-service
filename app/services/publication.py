@@ -4,28 +4,78 @@ from decimal import Decimal
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
-from tusumba_contracts import ApplicationApproved, BaseEvent, EventEnvelope, EventPublished
+from tusumba_contracts import (
+    ApplicationApproved,
+    BaseEvent,
+    ClubPageApplicationData,
+    EventEnvelope,
+    EventPublished,
+)
 
 from app.events import enqueue_event
-from app.models import Event, EventStatus, EventTeamMember, EventVersion, TeamRole
+from app.models import (
+    Club,
+    ClubAdmin,
+    ClubStatus,
+    ClubVersion,
+    Event,
+    EventStatus,
+    EventTeamMember,
+    EventVersion,
+    TeamRole,
+)
 
 logger = logging.getLogger(__name__)
+
+
+async def _create_club(
+    session: AsyncSession, approved: ApplicationApproved, data: ClubPageApplicationData
+) -> None:
+    existing = await session.scalar(select(Club.id).where(Club.id == approved.result_object_id))
+    if existing is not None:
+        logger.info("Секция %s уже создана", approved.result_object_id)
+        return
+
+    version_id = uuid.uuid4()
+    club = Club(
+        id=approved.result_object_id,
+        current_version_id=version_id,
+        status=ClubStatus.PUBLISHED,
+    )
+    version = ClubVersion(
+        id=version_id,
+        club_id=club.id,
+        version_no=1,
+        name=data.name,
+        description=data.description,
+        meeting_place=data.meeting_place,
+        schedule=data.schedule,
+        contacts=data.contacts,
+        edited_by=approved.author_user_id,
+    )
+    admin = ClubAdmin(club_id=club.id, user_id=approved.author_user_id)
+    session.add_all([club, version, admin])
+    await session.flush()
+    logger.info("Секция %s создана по заявке %s", club.id, approved.application_id)
 
 
 async def handle_application_approved(
     session: AsyncSession, envelope: EventEnvelope[BaseEvent]
 ) -> None:
-    """Создать мероприятие по одобренной заявке, назначить автора владельцем, опубликовать.
+    """Создать мероприятие или страницу секции по одобренной заявке.
 
-    Вызывается из process_event: повтор того же event_id сюда не доходит, а изменения
-    и запись в журнал processed_events фиксируются одной транзакцией.
+    Автор заявки становится владельцем мероприятия или администратором секции, о мероприятии
+    публикуется EventPublished. Вызывается из process_event: повтор того же event_id сюда
+    не доходит, а изменения и запись в журнал processed_events фиксируются одной транзакцией.
     """
     approved = envelope.payload
     if not isinstance(approved, ApplicationApproved):
         logger.warning("В очередь заявок пришло %s, пропущено", envelope.event_type)
         return
+    if approved.type == "club_page" and approved.club_page is not None:
+        await _create_club(session, approved, approved.club_page)
+        return
     if approved.type != "event" or approved.event is None:
-        # Страницы секций создаются в #19047.
         return
     existing = await session.scalar(select(Event.id).where(Event.id == approved.result_object_id))
     if existing is not None:
