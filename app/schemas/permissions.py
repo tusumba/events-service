@@ -12,3 +12,11 @@ class EventPermissions(BaseModel):
     user_id: uuid.UUID
     is_member: bool
     role: TeamRole | None = None
+
+
+class ClubPermissions(BaseModel):
+    """Является ли пользователь администратором секции (club_admins)."""
+
+    club_id: uuid.UUID
+    user_id: uuid.UUID
+    is_admin: bool
