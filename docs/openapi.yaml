@@ -1331,7 +1331,9 @@ components:
       properties:
         photo_url:
           type: string
-          description: Адрес загруженного фото
+          description: |
+            Адрес загруженного фото относительно шлюза: `/v1/events/{id}/photo?v=...`
+            или `/v1/clubs/{id}/photo?v=...`. Параметр `v` меняется при каждой загрузке.
     TeamMember:
       type: object
       description: Участник команды мероприятия

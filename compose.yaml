@@ -8,6 +8,7 @@ x-service: &service
     RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672/
     JWT_PUBLIC_KEY: ${JWT_PUBLIC_KEY:-}
     SERVICE_TOKEN: ${SERVICE_TOKEN:-dev-service-token}
+    PHOTOS_DIR: /app/photos
   depends_on:
     postgres:
       condition: service_healthy
@@ -47,6 +48,8 @@ services:
     <<: *service
     ports:
       - "${APP_PORT:-8000}:8000"
+    volumes:
+      - photos:/app/photos
     depends_on:
       postgres:
         condition: service_healthy
@@ -57,3 +60,4 @@ services:
 
 volumes:
   postgres-data:
+  photos:

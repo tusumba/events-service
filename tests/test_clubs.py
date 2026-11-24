@@ -61,16 +61,16 @@ async def test_catalog_card_fields(client: httpx2.AsyncClient, session: AsyncSes
     ]
 
 
-async def test_photo_url_is_null_even_when_version_has_photo(
+async def test_photo_url_from_current_version(
     client: httpx2.AsyncClient, session: AsyncSession
 ) -> None:
-    club = await add_club(session, "Фотоклуб", photo_path="clubs/photo.jpg")
+    club = await add_club(session, "Фотоклуб", photo_path="clubs/x/3f2a9c.jpg")
 
     [card] = (await catalog(client))["items"]
     page = (await client.get(f"/v1/clubs/{club.id}")).json()
 
-    assert card["photo_url"] is None
-    assert page["photo_url"] is None
+    assert card["photo_url"] == f"/v1/clubs/{club.id}/photo?v=3f2a9c"
+    assert page["photo_url"] == card["photo_url"]
 
 
 async def test_catalog_paginates(client: httpx2.AsyncClient, session: AsyncSession) -> None:
