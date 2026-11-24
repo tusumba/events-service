@@ -22,3 +22,6 @@ build/
 
 # Тестовые ключи из python -m tusumba_common.testing
 dev-keys/
+
+# Фото, загруженные при локальном запуске (PHOTOS_DIR)
+photos/

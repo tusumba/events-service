@@ -5,6 +5,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from tusumba_common import ApiError, CurrentUser
 
 from app.models import Event, EventVersion
+from app.photos import photo_url
 from app.repositories.events import EventFilters, EventRepository
 from app.schemas.events import EventCard, EventCardPage, EventDetail, Money, Organizer
 
@@ -27,7 +28,7 @@ def to_card(event: Event, version: EventVersion) -> EventCard:
         price=price,
         status=event.status,
         club_id=event.club_id,
-        photo_url=None,
+        photo_url=photo_url("events", event.id, event.photo_path),
     )
 
 

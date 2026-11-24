@@ -18,7 +18,7 @@
 
 ## API
 
-Внешний: `GET /v1/events`, `GET /v1/events/{id}`, `GET /v1/clubs`, `GET /v1/clubs/{id}`, `PATCH /v1/events/{id}`, `PATCH /v1/clubs/{id}`, `PUT /v1/events/{id}/photo`, `PUT /v1/clubs/{id}/photo`, `GET /v1/events/{id}/team`, `POST /v1/events/{id}/team/invitations`, `POST /v1/team-invitations/{id}/accept`, `PATCH` и `DELETE /v1/events/{id}/team/{userId}`, `GET /v1/events/{id}/versions`, `GET /v1/clubs/{id}/stats`.
+Внешний: `GET /v1/events`, `GET /v1/events/{id}`, `GET /v1/clubs`, `GET /v1/clubs/{id}`, `PATCH /v1/events/{id}`, `PATCH /v1/clubs/{id}`, `PUT`, `GET` и `DELETE /v1/events/{id}/photo` и `/v1/clubs/{id}/photo`, `GET /v1/events/{id}/team`, `POST /v1/events/{id}/team/invitations`, `POST /v1/team-invitations/{id}/accept`, `PATCH` и `DELETE /v1/events/{id}/team/{userId}`, `GET /v1/events/{id}/versions`, `GET /v1/clubs/{id}/stats`.
 
 Внутренний: `GET /internal/events/{id}/permissions`, `GET /internal/events/{id}/versions/{versionId}`, `GET /internal/clubs/{id}/versions/{versionId}`.
 
@@ -34,6 +34,7 @@ Python 3.12, FastAPI, SQLAlchemy 2 (async), Alembic, PostgreSQL 16 (расшир
 
 - таблицы `events` и `event_versions` в схеме PostgreSQL `events` (миграция Alembic);
 - таблица `event_team_members` и `GET /internal/events/{id}/permissions?user_id=` - роль пользователя в команде мероприятия (`owner`, `admin`, `editor`, `scanner`; `is_member = false`, если его нет в команде), 404 `event_not_found` для несуществующего и удалённого мероприятия; клиент с кешем Redis - `PermissionsClient` в tusumba-common (#19039);
+- фото мероприятия и секции (#19424): `PUT`, `GET` и `DELETE /v1/events/{id}/photo` и `/v1/clubs/{id}/photo`. Принимаются JPEG, PNG и WEBP до 5 МБ, тип определяется по содержимому файла, иначе 422 `file_invalid`. Фото мероприятия меняют владелец, администратор и редактор, фото секции - её администратор, остальные получают 403. Новое фото секции создаёт новую версию `club_versions`, файлы прежних версий не удаляются. Без фото `photo_url` равен null и клиент показывает стандартную обложку. Файлы лежат в каталоге `PHOTOS_DIR` (по умолчанию `photos`, в контейнере - том `/app/photos`);
 - `GET /v1/events` - каталог: опубликованные мероприятия с сегодняшней даты (по Новосибирску), ближайшие выше, пагинация `page` и `size`.
 - фильтры каталога: тип `is_free`, даты `date_from` и `date_to`, часть адреса `place`, статусы подтверждения `status` (можно несколько); применяются вместе и с пагинацией.
 - `GET /v1/events/{id}` - страница мероприятия: текущая версия текста, дата, место, цена, организатор (секция или пользователь), `my_role` для участника команды; 404 `event_not_found` для несуществующего и удалённого мероприятия.

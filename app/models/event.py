@@ -94,6 +94,8 @@ class Event(Base):
     longitude: Mapped[float | None] = mapped_column(Float)
     is_free: Mapped[bool]
     price: Mapped[Decimal | None] = mapped_column(Numeric(12, 2))
+    # Путь файла в PhotoStorage; null - фото нет, клиент показывает стандартную обложку.
+    photo_path: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 

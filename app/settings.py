@@ -1,3 +1,5 @@
+from pathlib import Path
+
 from pydantic import Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -15,6 +17,8 @@ class Settings(BaseSettings):
     database_echo: bool = False
     rabbitmq_url: SecretStr
     outbox_poll_seconds: float = Field(default=1.0, gt=0)
+    # Каталог для фото мероприятий и секций; в контейнере - том /app/photos.
+    photos_dir: Path = Path("photos")
 
     @field_validator("database_url")
     @classmethod

@@ -12,6 +12,7 @@ from app.db import create_engine, create_sessionmaker
 from app.events import publish_pending
 from app.logging import configure_logging
 from app.middleware import RequestIdMiddleware
+from app.photos import DiskPhotoStorage
 from app.settings import Settings
 
 
@@ -47,6 +48,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     app = FastAPI(title=settings.service_name, lifespan=lifespan)
     app.state.settings = settings
+    app.state.photo_storage = DiskPhotoStorage(settings.photos_dir)
     install_error_handlers(app)
     app.add_middleware(RequestIdMiddleware)
     app.include_router(health.router)

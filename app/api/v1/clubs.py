@@ -6,6 +6,7 @@ from pydantic import BaseModel
 from tusumba_common import ApiError, CurrentUser, optional_user
 
 from app.db import Session
+from app.photos import photo_url
 from app.repositories.clubs import get_published_club, is_club_admin, list_published_clubs
 
 router = APIRouter(prefix="/clubs", tags=["clubs"])
@@ -67,7 +68,7 @@ async def list_clubs(
             id=version.club_id,
             name=version.name,
             description=version.description,
-            photo_url=None,
+            photo_url=photo_url("clubs", version.club_id, version.photo_path),
         )
         for version in versions
     ]
@@ -93,7 +94,7 @@ async def get_club(
         meeting_place=version.meeting_place,
         schedule=version.schedule,
         contacts=version.contacts,
-        photo_url=None,
+        photo_url=photo_url("clubs", version.club_id, version.photo_path),
         current_version_id=version.id,
         version_no=version.version_no,
         is_admin=user_id is not None and await is_club_admin(db, version.club_id, user_id),

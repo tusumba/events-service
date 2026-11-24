@@ -18,7 +18,7 @@ COPY alembic.ini ./
 COPY migrations ./migrations
 COPY app ./app
 
-RUN useradd --system --uid 10001 app
+RUN useradd --system --uid 10001 app \n    && mkdir /app/photos && chown app /app/photos
 USER app
 ENV PATH="/app/.venv/bin:$PATH"
 
