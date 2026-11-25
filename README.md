@@ -20,7 +20,7 @@
 
 Внешний: `GET /v1/events`, `GET /v1/events/{id}`, `GET /v1/clubs`, `GET /v1/clubs/{id}`, `PATCH /v1/events/{id}`, `PATCH /v1/clubs/{id}`, `PUT /v1/events/{id}/photo`, `PUT /v1/clubs/{id}/photo`, `GET /v1/events/{id}/team`, `POST /v1/events/{id}/team/invitations`, `POST /v1/team-invitations/{id}/accept`, `PATCH` и `DELETE /v1/events/{id}/team/{userId}`, `GET /v1/events/{id}/versions`, `GET /v1/clubs/{id}/stats`.
 
-Внутренний: `GET /internal/events/{id}/permissions`, `GET /internal/events/{id}/versions/{versionId}`, `GET /internal/clubs/{id}/versions/{versionId}`.
+Внутренний: `GET /internal/events/{id}/permissions`, `GET /internal/clubs/{id}/permissions`, `GET /internal/events/{id}/versions/{versionId}`, `GET /internal/clubs/{id}/versions/{versionId}`.
 
 События в брокер: `EventPublished`, `EventUpdated`. Потребляет `ApplicationApproved`.
 
@@ -38,8 +38,9 @@ Python 3.12, FastAPI, SQLAlchemy 2 (async), Alembic, PostgreSQL 16 (расшир
 - фильтры каталога: тип `is_free`, даты `date_from` и `date_to`, часть адреса `place`, статусы подтверждения `status` (можно несколько); применяются вместе и с пагинацией.
 - `GET /v1/events/{id}` - страница мероприятия: текущая версия текста, дата, место, цена, организатор (секция или пользователь), `my_role` для участника команды; 404 `event_not_found` для несуществующего и удалённого мероприятия.
 - приём `ApplicationApproved` из RabbitMQ (очередь `events.applications`): мероприятие и первая версия текста создаются из данных заявки, автор становится владельцем (`owner`), в outbox записывается `EventPublished`; повторное событие не создаёт дубль (#19044). Заявки на страницы секций - в #19047.
+- `GET /internal/clubs/{id}/permissions?user_id=` - является ли пользователь администратором секции (`club_admins`), 404 `club_not_found` для несуществующей и заблокированной секции; Moderation проверяет так заявку от имени секции (#19427).
 
-Поиск по названию и фильтр по секции `club_id`, название секции-организатора на странице мероприятия, секции (в том числе `GET /internal/clubs/{id}/permissions` - после #19045), управление командой и остальное API из OpenAPI - в следующих задачах.
+Поиск по названию и фильтр по секции `club_id`, название секции-организатора на странице мероприятия, секции, управление командой и остальное API из OpenAPI - в следующих задачах.
 
 ## Запуск
 
